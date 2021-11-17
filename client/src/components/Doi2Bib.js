@@ -181,7 +181,7 @@ class Doi2Bib extends Component {
       <div className="text-center">
         <div className="row margin-top">
           <div className="offset-md-2 col-md-8">
-            <h2>updatebib &#8212; drop your bibtex file <br /> and we'll fill in missing data</h2>
+            <h2>updatebib &#8212; paste your bibtex file <br /> and we'll fill in missing data</h2>
           </div>
         </div>
         <div className="row margin-top">
