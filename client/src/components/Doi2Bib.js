@@ -41,10 +41,10 @@ class Doi2Bib extends Component {
   }
 
   handleKeyPress(event) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      this.generateBib();
-    }
+    // if (event.key === 'Enter') {
+    //   event.preventDefault();
+    //   this.generateBib();
+    // }
   }
 
   handleSubmit(event) {
