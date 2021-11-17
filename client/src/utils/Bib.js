@@ -62,10 +62,6 @@ export default class Bib {
         this.bib.tags.title = insertDollars(this.bib.tags.title);
       }
     }
-
-    // remove brackets from month
-    console.log(bibStr);
-    console.log(this.bib.tags.month);
   }
 
   toPrettyString() {

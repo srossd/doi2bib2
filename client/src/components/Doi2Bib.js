@@ -1,8 +1,6 @@
 import React, { Component } from 'react';
 import Bib from '../utils/Bib.js';
-import logo from './doi2bib-logo.png';
-
-import Code from './Code.js';
+var bibtexParse = require('@orcid/bibtex-parse-js');
 
 function getDomain() {
   if (process.env.NODE_ENV !== 'production') {
@@ -17,24 +15,23 @@ const BIB = '/bib/';
 class Doi2Bib extends Component {
   constructor(props) {
     super(props);
-    let doiInUrl = '';
-    if (props.location.pathname.startsWith(BIB)) {
-      doiInUrl = props.location.pathname.substring(BIB.length);
-    }
+
     this.state = {
-      value: doiInUrl
-    };
+      workInProgress: false,
+      value: '',
+      output: null,
+      error: null
+    }
 
     this.handleChange = this.handleChange.bind(this);
     this.handleSubmit = this.handleSubmit.bind(this);
     this.handleKeyPress = this.handleKeyPress.bind(this);
-    this.copyBibToClipboard = this.copyBibToClipboard.bind(this);
-    this.copyUrlToClipboard = this.copyUrlToClipboard.bind(this);
+    this.copyOutputToClipboard = this.copyOutputToClipboard.bind(this);
   }
 
   componentDidMount() {
     if (this.state.value) {
-      this.generateBib(false);
+      this.generateBib();
     }
     window.scrollTo(0, 0);
   }
@@ -46,13 +43,13 @@ class Doi2Bib extends Component {
   handleKeyPress(event) {
     if (event.key === 'Enter') {
       event.preventDefault();
-      this.generateBib(true);
+      this.generateBib();
     }
   }
 
   handleSubmit(event) {
     event.preventDefault();
-    this.generateBib(true);
+    this.generateBib();
   }
 
   copyToCipboard(event, text) {
@@ -68,33 +65,28 @@ class Doi2Bib extends Component {
     event.target.focus();
   }
 
-  copyBibToClipboard(event) {
-    this.copyToCipboard(event, this.state.bib);
+  copyOutputToClipboard(event) {
+    this.copyToCipboard(event, this.state.output);
   }
 
-  copyUrlToClipboard(event) {
-    this.copyToCipboard(event, this.state.url);
+  updateEntry(bibTags) {
+    if(bibTags.hasOwnProperty('eprint') && !bibTags.hasOwnProperty('journal')) {
+      return this.fetchData(bibTags.eprint);
+    }
+    else
+      return false;
   }
 
-  generateBib(changeBrowserURL) {
-    let idToSend = this.state.value;
-    let url;
-
-    this.setState({
-      bib: null,
-      url: null,
-      error: null,
-      workInProgress: true
-    });
-
+  fetchData(idToSend) {
     idToSend = idToSend.replace(/ /g, '');
+    let url;
 
     if (idToSend.match(/^(doi:|(https?:\/\/)?(dx\.)?doi\.org\/)?10\..+\/.+$/i)) {
       if (idToSend.match(/^doi:/i)) {
         idToSend = idToSend.substring(4);
       } else if (idToSend.indexOf('doi.org/') >= 0) {
-				idToSend = idToSend.substr(idToSend.indexOf('doi.org/') + 8)
-			}
+        idToSend = idToSend.substr(idToSend.indexOf('doi.org/') + 8)
+      }
 
       url = '/2/doi2bib';
     } else if (idToSend.match(/^\d+$|^PMC\d+(\.\d+)?$/)) {
@@ -108,33 +100,77 @@ class Doi2Bib extends Component {
     }
 
     if(url) {
-      fetch(getDomain() + url + '?id=' + idToSend)
-        .then(response => {
-          if (!response.ok) {
-            return response.text().then(Promise.reject.bind(Promise));
-          } else {
-            return response.text();
+      return fetch(getDomain() + url + '?id=' + idToSend);
+    } else {
+      return false;
+    }
+  }
+
+  generateBib() {
+    let bibInput = this.state.value;
+
+    this.setState({
+      output: null,
+      error: null,
+      workInProgress: true
+    });
+
+    let parsedBib = false;
+    try {
+      parsedBib = bibtexParse.toJSON(bibInput).map(entry => ({
+        citationKey: entry.citationKey,
+        entryType: entry.entryType,
+        entryTags: Object.fromEntries(
+          Object.entries(entry.entryTags).map(([k, v]) => [k.toLowerCase(), v])
+        )
+      }));
+    }
+    catch(error) {
+      this.setState({
+        error: 'Failed to parse BibTeX.',
+        workInProgress: false
+      });
+    }
+
+    if(parsedBib && parsedBib.length > 0) {
+      let newTags = parsedBib.map(entry => this.updateEntry(entry.entryTags));
+
+      Promise.all(newTags).then(values => {
+        let texts = values.map(val => {
+          if(val) {
+            if(!val.ok)
+              return val.text().then(Promise.reject.bind(Promise));
+            else
+              return val.text()
           }
-        })
-        .then(data => {
-          let bib = new Bib(data);
-          this.setState({
-            bib: bib.toPrettyString(),
-            url: bib.getURL(),
-            workInProgress: false
-          });
-          if (changeBrowserURL) {
-            this.props.history.push('/bib/' + this.state.value);
+          else
+            return false;
+        });
+        Promise.allSettled(texts).then(texts => {
+          let updatedBib = Array(parsedBib.length);
+          for(var i = 0; i < parsedBib.length; i++) {
+            if(texts[i].status === 'fulfilled' && texts[i].value) {
+              let tmpbib = new Bib(texts[i].value);
+              updatedBib[i] = {
+                citationKey: parsedBib[i].citationKey,
+                entryType: parsedBib[i].entryType,
+                entryTags: Object.assign(tmpbib.bib.tags, parsedBib[i].entryTags)
+              }
+            }
+            else
+              updatedBib[i] = parsedBib[i];
           }
-        }, data => {
+        
           this.setState({
-            error: data,
+            output: bibtexParse.toBibtex(updatedBib, false),
             workInProgress: false
           });
         });
-    } else {
+      });
+    }
+    else {
       this.setState({
-        error: 'Invalid ID. Must be DOI, PMID, or arXiv ID (after 2007).',
+        error: 'Failed to parse BibTeX.',
         workInProgress: false
       });
     }
@@ -144,51 +180,52 @@ class Doi2Bib extends Component {
     return (
       <div className="text-center">
         <div className="row margin-top">
-          <div className="col">
-            <img src={logo} alt="doi2bib_logo" height="60" width="60" />
+          <div className="offset-md-2 col-md-8">
+            <h2>updatebib &#8212; drop your bibtex file <br /> and we'll fill in missing data</h2>
           </div>
         </div>
         <div className="row margin-top">
-          <div className="offset-md-2 col-md-8">
-            <h2>doi2bib &#8212; give us a DOI<br/>and we will do our best to get you the BibTeX entry</h2>
-          </div>
-        </div>
-        <div className="row margin-top">
-          <div className="offset-md-2 col-md-8">
-            <form name="bibForm">
-              <div className="input-group">
-                <input type="text"
-                      className={'form-control' + (this.state.error ? ' is-invalid' : '')}
-                      maxLength="100"
-                      onChange={this.handleChange}
-                      onKeyPress={this.handleKeyPress}
-                      value={this.state.value}
-                      placeholder="Enter a doi, PMCID, or arXiv ID"
-                      autoFocus/>
+          <div className="col-md-5">
+            <div className="input-group">
+              <textarea
+                    className={'form-control' + (this.state.error ? ' is-invalid' : '')}
+                    rows="10"
+                    value={this.state.value}
+                    onChange={this.handleChange}
+                    onKeyPress={this.handleKeyPress}
+                    placeholder="Enter your BibTeX"
+                    autoFocus>
+              </textarea>
+            </div>
+            <div className="row">
+              <div className="offset-md-2 col-md-8">
                 <span className="input-group-btn">
-                  <button type="button" className="btn btn-light" onClick={this.handleSubmit}>get BibTeX</button>
+                  <button type="button" className="copy-button btn btn-light" onClick={this.handleSubmit}>update BibTeX</button>
                 </span>
               </div>
-            </form>
-          </div>
-        </div>
-        <div className="row margin-top">
-          <div className="offset-md-2 col-md-8">
-            { this.state.workInProgress && <i className="fa fa-refresh fa-spin"></i> }
-            { this.state.bib && <Code ref={(el) => this.bibArea = el}>{this.state.bib}</Code> }
-            { this.state.url && <a href={this.state.url} target="_blank" ref={(el) => this.urlArea = el}>{this.state.url}</a> }
-            { this.state.error && <pre className="text-danger text-left">{this.state.error}</pre> }
-          </div>
-        </div>
-        {
-          this.state.bib && this.state.url &&
-          <div className="row">
-            <div className="offset-md-2 col-md-8">
-              <button className="copy-button btn btn-light" onClick={this.copyBibToClipboard}>Copy Bib to Clipboard</button>
-              <button className="copy-button btn btn-light" onClick={this.copyUrlToClipboard}>Copy URL to Clipboard</button>
             </div>
           </div>
-        }
+          <div className="offset-md-2 col-md-5">
+              { this.state.workInProgress && <i className="fa fa-refresh fa-spin"></i> }
+              {this.state.output && <textarea
+                    className={'form-control' + (this.state.error ? ' is-invalid' : '')}
+                    rows="10"
+                    value={this.state.output}
+                    disabled="true">
+              </textarea>}
+              { this.state.error && <pre className="text-danger text-left">{this.state.error}</pre> }
+            {
+              this.state.output &&
+              <div className="row">
+                <div className="offset-md-2 col-md-8">
+                  <span className="input-group-btn">
+                    <button className="copy-button btn btn-light" onClick={this.copyOutputToClipboard}>Copy Output to Clipboard</button>
+                  </span>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
       </div>
     );
   }
